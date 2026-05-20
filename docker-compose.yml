@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7.0.11
+    container_name: rossmann_mongo
+    # command: ["--replSet", "rs0", "--bind_ip_all", "--port", "27017"]
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_DATABASE=rossmann_db
+    volumes:
+      - mongo_data:/data/db
+
+  python-app:
+    build: .
+    container_name: rossmann_generator
+    depends_on:
+      - mongodb
+
+volumes:
+  mongo_data:
