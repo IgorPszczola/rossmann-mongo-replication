@@ -12,6 +12,13 @@ services:
     volumes:
       - mongo_data:/data/db
 
+  mongo-init-replica:
+    image: mongo:7.0.11
+    container_name: rossmann_mongo_init
+    depends_on:
+      - mongodb
+    entrypoint: [ "/bin/sh", "-c", "sleep 5 && mongosh --host mongodb:27017 --eval 'rs.initiate()'" ]
+
   python-app:
     build: .
     container_name: rossmann_generator
