@@ -25,5 +25,12 @@ services:
     depends_on:
       - mongodb
 
+  python-listener:
+    build: .
+    container_name: rossmann_listener
+    depends_on:
+      - mongodb
+    command: ["python", "-u", "pipeline.py"]
+
 volumes:
   mongo_data:
