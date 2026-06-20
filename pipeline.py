@@ -1,20 +1,22 @@
 import os
 from pymongo import MongoClient
-from db import get_pg_connection, get_last_resume_token, save_receipt_and_token
+from postgres_target import PostgresTarget
 
 # MongoDB connection URI config
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://rossmann_mongo:27017/")
 
 def main():
-    # Initialize connection to PostgreSQL
-    pg_conn = get_pg_connection()
+    # Initialize the replication target (PostgreSQL)
+    pg_target = PostgresTarget()
+    pg_target.connect()
     
+    # Initialize MongoDB Client
     client = MongoClient(MONGO_URI)
     db = client["rossmann_db"]
     receipts_collection = db["receipts"]
 
-    # Retrieve the last saved change stream offset from PostgreSQL
-    resume_token = get_last_resume_token(pg_conn)
+    # Retrieve the last saved change stream offset from the target database
+    resume_token = pg_target.get_last_resume_token()
     
     print("\nStarting Change Stream listener on 'receipts' collection...")
     if resume_token:
@@ -53,15 +55,16 @@ def main():
                     print(f"NEW RECEIPT CAPTURED! Operation: {operation}")
                     print(f"Customer: {customer_name}, Amount: {amount} PLN (ID: {transaction_id})")
                     
-                    # Save to PostgreSQL and update the replication offset
-                    save_receipt_and_token(pg_conn, transaction_id, timestamp, doc, token)
+                    # Replicate to target and update its offset
+                    pg_target.save(transaction_id, timestamp, doc, token)
                     print("SAVED to PostgreSQL + replication offset updated.")
                     print("-" * 50)
                     
     except KeyboardInterrupt:
         print("\nListener terminated by user.")
     finally:
-        pg_conn.close()
+        # Safely clean up resources
+        pg_target.close()
         client.close()
 
 if __name__ == "__main__":
