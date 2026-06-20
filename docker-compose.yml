@@ -31,7 +31,26 @@ services:
     depends_on:
       - mongodb
       - mongodb-backup
+      - postgres
     command: ["python", "-u", "pipeline.py"]
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=rossmann_relational_db
+      - POSTGRES_USER=rossmann_user
+      - POSTGRES_PASSWORD=rossmann_password
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: rossmann_postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: rossmann_user
+      POSTGRES_PASSWORD: rossmann_password
+      POSTGRES_DB: rossmann_relational_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
 
   # MONGODB (BACKUP)
   mongodb-backup:
@@ -47,3 +66,4 @@ services:
 volumes:
   mongo_data:
   mongo_backup_data:
+  postgres_data:
