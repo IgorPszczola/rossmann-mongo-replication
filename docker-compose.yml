@@ -30,7 +30,20 @@ services:
     container_name: rossmann_listener
     depends_on:
       - mongodb
+      - mongodb-backup
     command: ["python", "-u", "pipeline.py"]
+
+  # MONGODB (BACKUP)
+  mongodb-backup:
+    image: mongo:7.0.11
+    container_name: rossmann_mongo_backup
+    ports:
+      - "27018:27017"
+    environment:
+      - MONGO_INITDB_DATABASE=rossmann_backup_db
+    volumes:
+      - mongo_backup_data:/data/db
 
 volumes:
   mongo_data:
+  mongo_backup_data:
