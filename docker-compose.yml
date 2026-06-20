@@ -51,6 +51,7 @@ services:
       POSTGRES_DB: rossmann_relational_db
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./db-init:/docker-entrypoint-initdb.d
 
   # MONGODB (BACKUP)
   mongodb-backup:
