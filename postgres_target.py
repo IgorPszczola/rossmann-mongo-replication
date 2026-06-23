@@ -18,7 +18,7 @@ class PostgresTarget:
         # Register JSONB type globally for psycopg2
         psycopg2.extras.register_default_jsonb(globally=True)
 
-    def connect(self):
+    def connect(self, keep_retry=True):
         """Connects to PostgreSQL with a retry loop for container lag."""
         while True:
             try:
@@ -33,6 +33,8 @@ class PostgresTarget:
                 print("Connected to PostgreSQL successfully!")
                 break
             except psycopg2.OperationalError as e:
+                if not keep_retry:
+                    raise
                 print(f"PostgreSQL is not ready yet ({e}). Retrying in 2 seconds...")
                 time.sleep(2)
 
@@ -65,13 +67,44 @@ class PostgresTarget:
             print(f"Error reading resume_token from PostgreSQL: {e}")
         return None
 
-    def save(self, transaction_id, timestamp, doc, resume_token):
-        """Saves receipt data and replication offset in a single ACID transaction."""
+    def _write_resume_token(self, cur, clean_token):
+        cur.execute(
+            """
+            INSERT INTO replication_state (pipeline_name, resume_token, updated_at)
+            VALUES (%s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (pipeline_name) DO UPDATE
+            SET resume_token = EXCLUDED.resume_token, updated_at = CURRENT_TIMESTAMP;
+            """,
+            ("rossmann_replication", Json(clean_token))
+        )
+
+    def save_resume_token(self, resume_token):
+        """Saves the latest processed change-stream resume token."""
+        if not self.conn:
+            raise ConnectionError("PostgreSQL connection is not established.")
+
+        clean_token = self._clean_doc(resume_token)
+
+        try:
+            with self.conn.cursor() as cur:
+                self._write_resume_token(cur, clean_token)
+
+            self.conn.commit()
+        except Exception as e:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            print(f"PostgreSQL offset error, executed ROLLBACK: {e}")
+            raise e
+
+    def save(self, transaction_id, timestamp, doc, resume_token=None):
+        """Saves receipt data. Optionally saves the replication offset for compatibility."""
         if not self.conn:
             raise ConnectionError("PostgreSQL connection is not established.")
             
         clean_receipt_data = self._clean_doc(doc)
-        clean_token = self._clean_doc(resume_token)
+        clean_token = self._clean_doc(resume_token) if resume_token is not None else None
 
         try:
             with self.conn.cursor() as cur:
@@ -86,20 +119,15 @@ class PostgresTarget:
                     (transaction_id, timestamp, Json(clean_receipt_data))
                 )
                 
-                # 2. Update the replication offset
-                cur.execute(
-                    """
-                    INSERT INTO replication_state (pipeline_name, resume_token, updated_at)
-                    VALUES (%s, %s, CURRENT_TIMESTAMP)
-                    ON CONFLICT (pipeline_name) DO UPDATE
-                    SET resume_token = EXCLUDED.resume_token, updated_at = CURRENT_TIMESTAMP;
-                    """,
-                    ("rossmann_replication", Json(clean_token))
-                )
+                if clean_token is not None:
+                    self._write_resume_token(cur, clean_token)
                 
             self.conn.commit()
         except Exception as e:
-            self.conn.rollback()
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
             print(f"PostgreSQL Transaction error, executed ROLLBACK: {e}")
             raise e
 
@@ -107,4 +135,5 @@ class PostgresTarget:
         """Closes the connection safely."""
         if self.conn:
             self.conn.close()
+            self.conn = None
             print("PostgreSQL connection closed.")
