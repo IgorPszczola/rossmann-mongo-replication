@@ -19,7 +19,7 @@ def save_receipt(document):
         {"$set": document_copy},
         upsert=True,
     )
-    print(f"[MongoDB backup] Replicated receipt for customer: {document_copy['customer']['first_name']}")
+    print(f"[MongoDB backup] Successfully replicated receipt for customer: {document_copy['customer']['first_name']}")
 
 def delete_receipt(mongo_id=None, transaction_id=None):
     """Deletes a receipt from the MongoDB backup database."""
