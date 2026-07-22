@@ -4,7 +4,7 @@ import time
 from pymongo import MongoClient
 
 from adapter_files import FileArchiveAdapter
-from adapter_mongodb import save_receipt as save_mongo_backup
+from adapter_mongodb import save_receipt as save_mongo_backup, delete_receipt as delete_mongo_backup
 from postgres_target import PostgresTarget
 from adapter_redis import save_receipt as save_redis_cache
 
@@ -18,11 +18,21 @@ class MongoBackupAdapter:
 
     def handle(self, change):
         operation = change.get("operationType")
-        if operation != "insert":
+        if operation in ["insert", "update"]:
+            doc = change.get("fullDocument")
+            if doc:
+                save_mongo_backup(doc)
+            else:
+                print(f"[MongoDB backup] Warning: No fullDocument present for operation: {operation}")
+        elif operation == "delete":
+            document_key = change.get("documentKey", {})
+            mongo_id = document_key.get("_id")
+            if mongo_id:
+                delete_mongo_backup(mongo_id=mongo_id)
+            else:
+                print(f"[MongoDB backup] Warning: Cannot delete without documentKey _id")
+        else:
             print(f"[MongoDB backup] Skipping unsupported operation: {operation}")
-            return
-
-        save_mongo_backup(change["fullDocument"])
 
 
 class PostgresReceiptAdapter:
@@ -33,16 +43,32 @@ class PostgresReceiptAdapter:
 
     def handle(self, change):
         operation = change.get("operationType")
-        if operation != "insert":
+        if operation == "insert":
+            doc = change["fullDocument"]
+            self.target.save(
+                doc["transaction_id"],
+                doc["timestamp"],
+                doc,
+            )
+        elif operation == "update":
+            doc = change.get("fullDocument")
+            if doc and "transaction_id" in doc:
+                self.target.update(
+                    doc["transaction_id"],
+                    doc["timestamp"],
+                    doc,
+                )
+            else:
+                print(f"[PostgreSQL] Warning: Cannot update without fullDocument/transaction_id")
+        elif operation == "delete":
+            document_key = change.get("documentKey", {})
+            mongo_id = document_key.get("_id")
+            if mongo_id:
+                self.target.delete(mongo_id)
+            else:
+                print(f"[PostgreSQL] Warning: Cannot delete without documentKey _id")
+        else:
             print(f"[PostgreSQL] Skipping unsupported operation: {operation}")
-            return
-
-        doc = change["fullDocument"]
-        self.target.save(
-            doc["transaction_id"],
-            doc["timestamp"],
-            doc,
-        )
 
     def reconnect(self):
         self.target.close()
@@ -131,13 +157,24 @@ def print_change_summary(change):
     operation = change.get("operationType")
 
     if operation == "insert":
-        doc = change["fullDocument"]
-        transaction_id = doc["transaction_id"]
-        customer_name = doc["customer"]["first_name"]
-        amount = doc["payment"]["amount_paid"]
+        doc = change.get("fullDocument", {})
+        transaction_id = doc.get("transaction_id", "N/A")
+        customer_name = doc.get("customer", {}).get("first_name", "N/A")
+        amount = doc.get("payment", {}).get("amount_paid", 0)
 
         print(f"NEW RECEIPT CAPTURED! Operation: {operation}")
         print(f"Customer: {customer_name}, Amount: {amount} PLN (ID: {transaction_id})")
+        return
+    elif operation == "update":
+        doc = change.get("fullDocument", {})
+        transaction_id = doc.get("transaction_id", "N/A")
+        customer_name = doc.get("customer", {}).get("first_name", "N/A")
+        amount = doc.get("payment", {}).get("amount_paid", 0)
+        print(f"RECEIPT UPDATED! Operation: {operation}")
+        print(f"Customer: {customer_name}, New Amount: {amount} PLN (ID: {transaction_id})")
+        return
+    elif operation == "delete":
+        print(f"RECEIPT DELETED! Operation: {operation}, DocumentKey: {change.get('documentKey')}")
         return
 
     print(f"CHANGE CAPTURED! Operation: {operation}, Document: {change.get('documentKey')}")
