@@ -8,7 +8,10 @@ from adapter_mongodb import (
     delete_receipt as delete_mongo_backup,
     save_receipt as save_mongo_backup,
 )
-from adapter_redis import save_receipt as save_redis_cache
+from adapter_redis import (
+    delete_receipt as delete_redis_cache,
+    save_receipt as save_redis_cache,
+)
 from dead_letter_queue import DeadLetterQueue
 from postgres_target import PostgresTarget
 
@@ -94,11 +97,25 @@ class RedisCacheAdapter:
 
     def handle(self, change):
         operation = change.get("operationType")
-        if operation != "insert":
-            print(f"[Redis Cache] Skipping unsupported operation: {operation}")
-            return
 
-        save_redis_cache(change["fullDocument"])
+        if operation in ["insert", "update"]:
+            doc = change.get("fullDocument")
+            if doc:
+                save_redis_cache(doc)
+            else:
+                print(
+                    f"[Redis Cache] Warning: No fullDocument present "
+                    f"for operation: {operation}"
+                )
+        elif operation == "delete":
+            document_key = change.get("documentKey", {})
+            source_id = document_key.get("_id")
+            if source_id:
+                delete_redis_cache(source_id=source_id)
+            else:
+                print("[Redis Cache] Warning: Cannot delete without documentKey _id")
+        else:
+            print(f"[Redis Cache] Skipping unsupported operation: {operation}")
 
 
 def _retry_limit_reached(attempt, limit):
