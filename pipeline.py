@@ -5,12 +5,14 @@ from pymongo import MongoClient
 
 from adapter_files import FileArchiveAdapter
 from adapter_mongodb import save_receipt as save_mongo_backup
+from dead_letter_queue import DeadLetterQueue
 from postgres_target import PostgresTarget
 
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://rossmann_mongo:27017/")
 RETRY_DELAY_SECONDS = int(os.getenv("RETRY_DELAY_SECONDS", "5"))
-MAX_RETRIES = int(os.getenv("REPLICATION_MAX_RETRIES", "0"))
+MAX_RETRIES = int(os.getenv("REPLICATION_MAX_RETRIES", "3"))
+OFFSET_MAX_RETRIES = int(os.getenv("OFFSET_MAX_RETRIES", "0"))
 
 
 class MongoBackupAdapter:
@@ -49,8 +51,8 @@ class PostgresReceiptAdapter:
         self.target.connect(keep_retry=False)
 
 
-def _retry_limit_reached(attempt):
-    return MAX_RETRIES > 0 and attempt >= MAX_RETRIES
+def _retry_limit_reached(attempt, limit):
+    return limit > 0 and attempt >= limit
 
 
 def _reconnect_adapter(adapter):
@@ -64,7 +66,7 @@ def _reconnect_adapter(adapter):
         print(f"[Retry] Reconnect failed for {adapter.name}: {reconnect_error}")
 
 
-def broadcast_with_retry(change, adapters):
+def broadcast_with_retry(change, adapters, dead_letter_queue):
     attempt = 1
 
     while True:
@@ -74,7 +76,7 @@ def broadcast_with_retry(change, adapters):
             for adapter in adapters:
                 failed_adapter = adapter
                 adapter.handle(change)
-            return
+            return True
         except Exception as error:
             adapter_name = failed_adapter.name if failed_adapter else "unknown adapter"
             print(f"[Error] {adapter_name} failed on attempt {attempt}: {error}")
@@ -82,8 +84,9 @@ def broadcast_with_retry(change, adapters):
 
             _reconnect_adapter(failed_adapter)
 
-            if _retry_limit_reached(attempt):
-                raise
+            if _retry_limit_reached(attempt, MAX_RETRIES):
+                dead_letter_queue.save(change, adapter_name, error, attempt)
+                return False
 
             print(f"[Retry] Retrying full broadcast in {RETRY_DELAY_SECONDS} seconds...")
             time.sleep(RETRY_DELAY_SECONDS)
@@ -107,7 +110,7 @@ def save_offset_with_retry(pg_target, resume_token):
             except Exception as reconnect_error:
                 print(f"[Retry] PostgreSQL reconnect failed: {reconnect_error}")
 
-            if _retry_limit_reached(attempt):
+            if _retry_limit_reached(attempt, OFFSET_MAX_RETRIES):
                 raise
 
             print(f"[Retry] Retrying offset save in {RETRY_DELAY_SECONDS} seconds...")
@@ -119,10 +122,20 @@ def print_change_summary(change):
     operation = change.get("operationType")
 
     if operation == "insert":
-        doc = change["fullDocument"]
-        transaction_id = doc["transaction_id"]
-        customer_name = doc["customer"]["first_name"]
-        amount = doc["payment"]["amount_paid"]
+        doc = change.get("fullDocument") or {}
+        if not isinstance(doc, dict):
+            doc = {}
+
+        customer = doc.get("customer") or {}
+        payment = doc.get("payment") or {}
+        if not isinstance(customer, dict):
+            customer = {}
+        if not isinstance(payment, dict):
+            payment = {}
+
+        transaction_id = doc.get("transaction_id", "unknown")
+        customer_name = customer.get("first_name", "unknown")
+        amount = payment.get("amount_paid", "unknown")
 
         print(f"NEW RECEIPT CAPTURED! Operation: {operation}")
         print(f"Customer: {customer_name}, Amount: {amount} PLN (ID: {transaction_id})")
@@ -154,6 +167,7 @@ def main():
         FileArchiveAdapter(),
         PostgresReceiptAdapter(pg_target),
     ]
+    dead_letter_queue = DeadLetterQueue()
 
     client = MongoClient(MONGO_URI)
     db = client["rossmann_db"]
@@ -175,9 +189,12 @@ def main():
         with stream:
             for change in stream:
                 print_change_summary(change)
-                broadcast_with_retry(change, adapters)
+                replicated = broadcast_with_retry(change, adapters, dead_letter_queue)
                 save_offset_with_retry(pg_target, change["_id"])
-                print("SAVED to all adapters + replication offset updated.")
+                if replicated:
+                    print("SAVED to all adapters + replication offset updated.")
+                else:
+                    print("MOVED to DLQ + replication offset updated. Continuing with next change.")
                 print("-" * 50)
 
     except KeyboardInterrupt:
