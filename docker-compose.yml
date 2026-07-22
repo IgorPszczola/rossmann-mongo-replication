@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   mongodb:
     image: mongo:7.0.11
@@ -11,28 +9,62 @@ services:
       - MONGO_INITDB_DATABASE=rossmann_db
     volumes:
       - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
 
   mongo-init-replica:
     image: mongo:7.0.11
     container_name: rossmann_mongo_init
     depends_on:
-      - mongodb
-    entrypoint: [ "/bin/sh", "-c", "sleep 5 && mongosh --host mongodb:27017 --eval \"rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'mongodb:27017'}]})\"" ]
+      mongodb:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until mongosh --host mongodb:27017 --quiet --eval "
+          try {
+            if (rs.status().ok) quit(0);
+          } catch (statusError) {
+            const config = db.getSiblingDB('local').system.replset.findOne();
+            if (config) {
+              config.members[0].host = 'mongodb:27017';
+              try {
+                if (rs.reconfig(config, {force: true}).ok) quit(0);
+              } catch (reconfigError) {}
+            } else {
+              try {
+                if (rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'mongodb:27017'}]}).ok) quit(0);
+              } catch (initError) {}
+            }
+          }
+          quit(1);
+        "; do
+          sleep 2;
+        done
 
   python-app:
     build: .
     container_name: rossmann_generator
     depends_on:
-      - mongodb
+      python-listener:
+        condition: service_healthy
 
   python-listener:
     build: .
     container_name: rossmann_listener
     depends_on:
-      - mongodb
-      - mongodb-backup
-      - postgres
-      - redis
+      mongo-init-replica:
+        condition: service_completed_successfully
+      mongodb-backup:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     command: ["python", "-u", "pipeline.py"]
     environment:
       - POSTGRES_HOST=postgres
@@ -44,8 +76,14 @@ services:
       - OFFSET_MAX_RETRIES=0
       - DEAD_LETTER_QUEUE_PATH=/app/data/dead_letter_queue.jsonl
       - FILE_ARCHIVE_PATH=/app/data/replication_events.jsonl
+      - LISTENER_READY_FILE=/tmp/rossmann-listener-ready
     volumes:
       - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/rossmann-listener-ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
 
   postgres:
     image: postgres:16-alpine
@@ -59,6 +97,11 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./db-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rossmann_user -d rossmann_relational_db"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
 
   # MONGODB (BACKUP)
   mongodb-backup:
@@ -70,6 +113,11 @@ services:
       - MONGO_INITDB_DATABASE=rossmann_backup_db
     volumes:
       - mongo_backup_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
 
   # REDIS (CACHE)
   redis:
@@ -77,6 +125,11 @@ services:
     container_name: rossmann_redis
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
 
 volumes:
   mongo_data:

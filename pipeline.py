@@ -20,6 +20,7 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://rossmann_mongo:27017/")
 RETRY_DELAY_SECONDS = int(os.getenv("RETRY_DELAY_SECONDS", "5"))
 MAX_RETRIES = int(os.getenv("REPLICATION_MAX_RETRIES", "3"))
 OFFSET_MAX_RETRIES = int(os.getenv("OFFSET_MAX_RETRIES", "0"))
+LISTENER_READY_FILE = os.getenv("LISTENER_READY_FILE")
 
 
 class MongoBackupAdapter:
@@ -246,7 +247,27 @@ def open_change_stream(collection, resume_token):
         return collection.watch(**watch_options)
 
 
+def set_listener_ready(ready):
+    if not LISTENER_READY_FILE:
+        return
+
+    if ready:
+        ready_dir = os.path.dirname(LISTENER_READY_FILE)
+        if ready_dir:
+            os.makedirs(ready_dir, exist_ok=True)
+        with open(LISTENER_READY_FILE, "w", encoding="utf-8") as ready_file:
+            ready_file.write("ready\n")
+        return
+
+    try:
+        os.remove(LISTENER_READY_FILE)
+    except FileNotFoundError:
+        pass
+
+
 def main():
+    set_listener_ready(False)
+
     pg_target = PostgresTarget()
     pg_target.connect()
 
@@ -271,6 +292,7 @@ def main():
         print("No saved resume token found. Listening from now.")
 
     stream = open_change_stream(receipts_collection, resume_token)
+    set_listener_ready(True)
 
     print("Waiting for new receipts. Press Ctrl+C to terminate.\n")
 
@@ -293,6 +315,7 @@ def main():
     except KeyboardInterrupt:
         print("\nListener terminated by user.")
     finally:
+        set_listener_ready(False)
         pg_target.close()
         client.close()
 
