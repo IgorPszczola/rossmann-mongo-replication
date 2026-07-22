@@ -99,7 +99,7 @@ class PostgresTarget:
             raise e
 
     def save(self, transaction_id, timestamp, doc, resume_token=None):
-        """Saves receipt data. Optionally saves the replication offset for compatibility."""
+        """Saves or inserts receipt data."""
         if not self.conn:
             raise ConnectionError("PostgreSQL connection is not established.")
             
@@ -129,6 +129,57 @@ class PostgresTarget:
             except Exception:
                 pass
             print(f"PostgreSQL Transaction error, executed ROLLBACK: {e}")
+            raise e
+
+    def update(self, transaction_id, timestamp, doc):
+        """Updates an existing receipt in PostgreSQL."""
+        if not self.conn:
+            raise ConnectionError("PostgreSQL connection is not established.")
+
+        clean_receipt_data = self._clean_doc(doc)
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE receipts 
+                    SET timestamp = %s, data = %s, replicated_at = CURRENT_TIMESTAMP
+                    WHERE transaction_id = %s;
+                    """,
+                    (timestamp, Json(clean_receipt_data), transaction_id)
+                )
+            self.conn.commit()
+            print(f"[PostgreSQL] Updated receipt: {transaction_id}")
+        except Exception as e:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            print(f"PostgreSQL Update error, executed ROLLBACK: {e}")
+            raise e
+
+    def delete(self, identifier):
+        """Deletes a receipt from PostgreSQL by its transaction_id or MongoDB _id."""
+        if not self.conn:
+            raise ConnectionError("PostgreSQL connection is not established.")
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM receipts 
+                    WHERE transaction_id = %s OR data->>'_id' = %s;
+                    """,
+                    (str(identifier), str(identifier))
+                )
+            self.conn.commit()
+            print(f"[PostgreSQL] Deleted receipt matching identifier: {identifier}")
+        except Exception as e:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            print(f"PostgreSQL Delete error, executed ROLLBACK: {e}")
             raise e
 
     def close(self):
