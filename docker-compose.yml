@@ -32,6 +32,7 @@ services:
       - mongodb
       - mongodb-backup
       - postgres
+      - redis
     command: ["python", "-u", "pipeline.py"]
     environment:
       - POSTGRES_HOST=postgres
@@ -69,6 +70,13 @@ services:
       - MONGO_INITDB_DATABASE=rossmann_backup_db
     volumes:
       - mongo_backup_data:/data/db
+
+  # REDIS (CACHE)
+  redis:
+    image: redis:7.2-alpine
+    container_name: rossmann_redis
+    ports:
+      - "6379:6379"
 
 volumes:
   mongo_data:
