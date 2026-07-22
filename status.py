@@ -13,7 +13,11 @@ except ImportError:
 # Helper to normalize documents for exact comparison
 def normalize(data):
     if isinstance(data, dict):
-        return {k: normalize(v) for k, v in data.items() if k != "_id"}
+        return {
+            key: normalize(value)
+            for key, value in data.items()
+            if key not in {"_id", "source_id"}
+        }
     elif isinstance(data, list):
         return [normalize(item) for item in data]
     elif isinstance(data, datetime):
@@ -96,10 +100,13 @@ def main():
     if not client_redis:
         print("[ERROR] Could not connect to Redis Cache!")
         connections_ok = False
+    if pg_data is None:
+        print("[ERROR] Could not load data from PostgreSQL!")
+        connections_ok = False
 
     if not connections_ok:
         print("\nStatus check aborted due to missing connections.")
-        sys.exit(1)
+        return 1
 
     db_source = client_source["rossmann_db"]
     receipts_source = db_source["receipts"]
@@ -227,13 +234,16 @@ def main():
     # Display results
     if not inconsistencies:
         print(" Consistency status: CONSISTENT (No anomalies detected)")
+        exit_code = 0
     else:
         print(f" Consistency status: INCONSISTENT ({len(inconsistencies)} anomalies detected!)")
         print("-" * 60)
         for inc in inconsistencies:
             print(f"- [ID: {inc['transaction_id']}] Database: {inc['db']} | Issue: {inc['error']}")
+        exit_code = 1
 
     print("=" * 60)
+    return exit_code
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
