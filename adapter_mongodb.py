@@ -20,4 +20,4 @@ def save_receipt(document):
         {"$set": document_copy},
         upsert=True,
     )
-    print(f"[MongoDB backup] Pomyślnie zreplikowano paragon dla klienta: {document_copy['customer']['first_name']}")
+    print(f"[MongoDB backup] Successfully replicated receipt for customer: {document_copy['customer']['first_name']}")

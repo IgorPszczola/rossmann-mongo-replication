@@ -6,7 +6,7 @@ from pymongo import MongoClient
 from adapter_files import FileArchiveAdapter
 from adapter_mongodb import save_receipt as save_mongo_backup
 from postgres_target import PostgresTarget
-
+from adapter_redis import save_receipt as save_redis_cache
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://rossmann_mongo:27017/")
 RETRY_DELAY_SECONDS = int(os.getenv("RETRY_DELAY_SECONDS", "5"))
@@ -47,6 +47,18 @@ class PostgresReceiptAdapter:
     def reconnect(self):
         self.target.close()
         self.target.connect(keep_retry=False)
+
+
+class RedisCacheAdapter:
+    name = "Redis cache"
+
+    def handle(self, change):
+        operation = change.get("operationType")
+        if operation != "insert":
+            print(f"[Redis Cache] Skipping unsupported operation: {operation}")
+            return
+
+        save_redis_cache(change["fullDocument"])
 
 
 def _retry_limit_reached(attempt):
@@ -153,6 +165,7 @@ def main():
         MongoBackupAdapter(),
         FileArchiveAdapter(),
         PostgresReceiptAdapter(pg_target),
+        RedisCacheAdapter(),
     ]
 
     client = MongoClient(MONGO_URI)
