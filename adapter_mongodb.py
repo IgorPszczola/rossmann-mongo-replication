@@ -1,5 +1,5 @@
 import os
-
+from bson import ObjectId
 from pymongo import MongoClient
 
 # MongoDB backup connection
@@ -27,12 +27,21 @@ def save_receipt(document):
 
 def delete_receipt(mongo_id=None, transaction_id=None):
     """Deletes a receipt from the MongoDB backup database."""
-    if transaction_id:
+    if transaction_id and not mongo_id:
         query = {"transaction_id": transaction_id}
-    elif mongo_id:
+    elif mongo_id and not transaction_id:
         query = {"source_id": mongo_id}
+    elif mongo_id and transaction_id:
+        query = {"$or": [{"transaction_id": transaction_id}, {"source_id": mongo_id}]}
     else:
         raise ValueError("MongoDB backup delete requires mongo_id or transaction_id")
 
-    backup_collection.delete_one(query)
-    print(f"[MongoDB backup] Deleted receipt matching: {transaction_id or mongo_id}")
+    result = backup_collection.delete_one(query)
+    deleted_count = getattr(result, "deleted_count", 1)
+    is_deleted = deleted_count > 0 if isinstance(deleted_count, int) else True
+
+    if is_deleted:
+        print(f"[MongoDB backup] Deleted receipt matching: {transaction_id or mongo_id}")
+    else:
+        print(f"[MongoDB backup] Warning: No receipt found to delete matching: {transaction_id or mongo_id}")
+    return deleted_count

@@ -78,7 +78,7 @@ services:
       - FILE_ARCHIVE_PATH=/app/data/replication_events.jsonl
       - LISTENER_READY_FILE=/tmp/rossmann-listener-ready
     volumes:
-      - ./data:/app/data
+      - .:/app
     healthcheck:
       test: ["CMD", "test", "-f", "/tmp/rossmann-listener-ready"]
       interval: 2s
